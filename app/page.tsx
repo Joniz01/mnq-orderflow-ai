@@ -34,18 +34,19 @@ Reglas obligatorias:
 - Saluda con: '✅ MNQ Order Flow Analyst listo.'
 - Termina con: '¿Quieres que profundice en algún nivel o analice otra imagen?'`;
 
-export default function OrderFlowAnalyzer() {
+export default function MNQOrderFlowAnalyzer() {
   const [provider, setProvider] = useState<'gemini' | 'grok'>('gemini');
   const [apiKey, setApiKey] = useState('');
-  const [model, setModel] = useState('gemini-2.5-flash'); // ← Modelo recomendado por defecto
+  const [model, setModel] = useState('gemini-2.5-flash');   // ← Modelo recomendado 2026
 
-  const [orderFlow, setOrderFlow] = useState<string>('');
-  const [gexbot, setGexbot] = useState<string>('');
+  const [orderFlowBase64, setOrderFlowBase64] = useState('');
+  const [gexbotBase64, setGexbotBase64] = useState('');
   const [analysis, setAnalysis] = useState('');
   const [loading, setLoading] = useState(false);
 
+  // Cargar configuración guardada
   useEffect(() => {
-    const saved = localStorage.getItem('of_ai_settings');
+    const saved = localStorage.getItem('mnq_ai_settings');
     if (saved) {
       const s = JSON.parse(saved);
       setProvider(s.provider || 'gemini');
@@ -55,74 +56,81 @@ export default function OrderFlowAnalyzer() {
   }, []);
 
   const saveSettings = () => {
-    localStorage.setItem('of_ai_settings', JSON.stringify({ provider, apiKey, model }));
-    alert('✅ Configuración guardada');
+    localStorage.setItem('mnq_ai_settings', JSON.stringify({ provider, apiKey, model }));
+    alert('✅ Configuración guardada correctamente');
   };
 
-  const handleImage = (e: React.ChangeEvent<HTMLInputElement>, isOrderFlow: boolean) => {
+  const handleFile = (e: React.ChangeEvent<HTMLInputElement>, isOrderFlow: boolean) => {
     const file = e.target.files?.[0];
     if (!file) return;
     const reader = new FileReader();
     reader.onload = (ev) => {
-      const base64 = (ev.target?.result as string)?.split(',')[1] || '';
-      if (isOrderFlow) setOrderFlow(base64);
-      else setGexbot(base64);
+      const base64 = (ev.target?.result as string).split(',')[1] || '';
+      if (isOrderFlow) setOrderFlowBase64(base64);
+      else setGexbotBase64(base64);
     };
     reader.readAsDataURL(file);
   };
 
   const analyze = async () => {
-    if (!apiKey) return alert('❌ Ingresa tu API Key');
-    if (!orderFlow) return alert('❌ Sube al menos la imagen de Order Flow');
+    if (!apiKey.trim()) return alert('❌ Ingresa tu API Key');
+    if (!orderFlowBase64) return alert('❌ Sube al menos la imagen de Order Flow');
 
     setLoading(true);
     setAnalysis('');
 
     try {
-      const modelName = model.trim();
-      let url = '';
+      const currentModel = model.trim() || 'gemini-2.5-flash';
+
+      let url: string;
       let headers: any = { 'Content-Type': 'application/json' };
       let body: any;
 
       if (provider === 'gemini') {
-        const parts = [
+        const parts: any[] = [
           { text: SYSTEM_PROMPT },
-          { inline_data: { mime_type: 'image/png', data: orderFlow } }
+          { inline_data: { mime_type: 'image/png', data: orderFlowBase64 } }
         ];
-        if (gexbot) parts.push({ inline_data: { mime_type: 'image/png', data: gexbot } });
+        if (gexbotBase64) {
+          parts.push({ inline_data: { mime_type: 'image/png', data: gexbotBase64 } });
+        }
 
-        url = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${apiKey.trim()}`;
+        url = `https://generativelanguage.googleapis.com/v1beta/models/${currentModel}:generateContent?key=${apiKey.trim()}`;
         body = { contents: [{ parts }] };
       } else {
-        // Grok
-        const content = [
+        // Grok (si consigues créditos)
+        const userContent: any[] = [
           { type: 'text', text: SYSTEM_PROMPT },
-          { type: 'image_url', image_url: { url: `data:image/png;base64,${orderFlow}` } }
+          { type: 'image_url', image_url: { url: `data:image/png;base64,${orderFlowBase64}` } }
         ];
-        if (gexbot) content.push({ type: 'image_url', image_url: { url: `data:image/png;base64,${gexbot}` } });
+        if (gexbotBase64) userContent.push({ type: 'image_url', image_url: { url: `data:image/png;base64,${gexbotBase64}` } });
 
         url = 'https://api.x.ai/v1/chat/completions';
         headers.Authorization = `Bearer ${apiKey.trim()}`;
         body = {
-          model: modelName || 'grok-2-vision-1212',
-          messages: [{ role: 'system', content: SYSTEM_PROMPT }, { role: 'user', content }],
-          max_tokens: 3000
+          model: currentModel,
+          messages: [{ role: 'system', content: SYSTEM_PROMPT }, { role: 'user', content: userContent }],
+          max_tokens: 3000,
         };
       }
 
-      const res = await fetch(url, { method: 'POST', headers, body: JSON.stringify(body) });
+      const res = await fetch(url, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(body),
+      });
 
       if (!res.ok) {
-        const err = await res.text();
-        throw new Error(`Error ${res.status}: ${err.substring(0, 300)}`);
+        const errorText = await res.text();
+        throw new Error(`HTTP ${res.status}: ${errorText.substring(0, 400)}`);
       }
 
       const data = await res.json();
-      const text = provider === 'gemini' 
-        ? data.candidates?.[0]?.content?.parts?.[0]?.text 
+      const resultText = provider === 'gemini'
+        ? data.candidates?.[0]?.content?.parts?.[0]?.text
         : data.choices?.[0]?.message?.content;
 
-      setAnalysis(text || 'No se recibió respuesta.');
+      setAnalysis(resultText || 'No se recibió respuesta del modelo.');
     } catch (err: any) {
       setAnalysis(`❌ Error: ${err.message}`);
     } finally {
@@ -131,16 +139,50 @@ export default function OrderFlowAnalyzer() {
   };
 
   return (
-    <div className="min-h-screen bg-zinc-950 text-white p-8 font-mono">
-      <div className="max-w-4xl mx-auto">
-        <h1 className="text-4xl font-bold text-lime-400 mb-2">🚀 MNQ Order Flow AI Analyst</h1>
-        <p className="text-zinc-400">Versión flexible - Gemini 2.5 Flash recomendado</p>
+    <div className="min-h-screen bg-zinc-950 text-white p-6 font-mono">
+      <div className="max-w-5xl mx-auto">
+        <h1 className="text-4xl font-bold text-lime-400">🚀 MNQ Order Flow AI Analyst</h1>
+        <p className="text-zinc-400">Versión flexible - Usa gemini-2.5-flash</p>
 
         {/* Configuración */}
-        <div className="mt-8 bg-zinc-900 border border-zinc-700 rounded-2xl p-6">
-          <h2 className="text-xl mb-4">⚙️ Configuración</h2>
+        <div className="mt-8 bg-zinc-900 border border-zinc-800 rounded-2xl p-6">
+          <h2 className="text-xl font-semibold mb-4">⚙️ Configuración</h2>
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <div>
-              <label className="block text-sm mb-1">Proveedor</label>
-              <select value={provider} onChange={(e) => setProvider(e.target.value as 'gemini' | 'grok')} className="w-full bg-zinc-800 p-3 rounded-lg border border-zinc-700">
-                <option value="gemini
+              <label className="block text-sm text-zinc-400 mb-1">Proveedor</label>
+              <select value={provider} onChange={(e) => setProvider(e.target.value as 'gemini' | 'grok')} className="w-full bg-zinc-800 border border-zinc-700 p-3 rounded-lg">
+                <option value="gemini">Google Gemini</option>
+                <option value="grok">xAI Grok</option>
+              </select>
+            </div>
+            <div>
+              <label className="block text-sm text-zinc-400 mb-1">Modelo (puedes cambiarlo)</label>
+              <input 
+                type="text" 
+                value={model} 
+                onChange={(e) => setModel(e.target.value)}
+                placeholder="gemini-2.5-flash"
+                className="w-full bg-zinc-800 border border-zinc-700 p-3 rounded-lg"
+              />
+              <p className="text-xs text-lime-400 mt-1">Recomendado: gemini-2.5-flash</p>
+            </div>
+            <div>
+              <label className="block text-sm text-zinc-400 mb-1">API Key</label>
+              <input 
+                type="password" 
+                value={apiKey} 
+                onChange={(e) => setApiKey(e.target.value)}
+                className="w-full bg-zinc-800 border border-zinc-700 p-3 rounded-lg"
+              />
+            </div>
+          </div>
+          <button onClick={saveSettings} className="mt-4 bg-lime-500 hover:bg-lime-600 text-black font-bold px-8 py-3 rounded-xl">
+            💾 Guardar Configuración
+          </button>
+        </div>
+
+        {/* Subida de imágenes */}
+        <div className="mt-8 grid grid-cols-1 lg:grid-cols-2 gap-6">
+          <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-6">
+            <h3 className="text-lime-400 font-semibold mb-3">📸 Order Flow (obligatorio)</h3>
+            <input type="file" accept="image/png" onChange={(e) =>
